@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual Environment
+venv/
+env/
+.env
+*.venv
+
+# Model Weights (too large for GitHub)
+weights/
+*.pt
+*.pth
+*.onnx
+
+# Video files (too large for GitHub)
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Outputs
+outputs/
+
+# YOLO runs
+runs/
+
+# Dataset (large files)
+dataset/
+*.ndjson
+
+# IDE
+.vscode/
+.idea/
+.qodo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb

@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MOT Project — Requirements
+# Covers all 3 approaches:
+#   Approach 1 — YOLO + ByteTrack
+#   Approach 2 — Faster R-CNN + DeepSORT + Strong ReID
+#   Approach 3 — Custom Detector + Kalman/Particle Filter + ReID
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Core Deep Learning ────────────────────────────────────────────────────────
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# ── YOLO (Approach 1 & 3) ────────────────────────────────────────────────────
+ultralytics>=8.0.0
+
+# ── Computer Vision ───────────────────────────────────────────────────────────
+opencv-python>=4.8.0
+Pillow>=9.5.0
+
+# ── Scientific Computing ──────────────────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+
+# ── Data Handling & Utilities ─────────────────────────────────────────────────
+pandas>=2.0.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+PyYAML>=6.0
+
+# ── Annotation / Dataset (NDJSON support) ────────────────────────────────────
+ndjson>=0.3.1
