@@ -41,3 +41,20 @@ Complete_track/
 ├── outputs/               # Result videos (not tracked by git)
 └── requirements_v2.txt
 ```
+
+## Dataset
+
+Dataset is included in this repository under `complete_track.v1i.yolov11/`
+
+Structure:
+complete_track.v1i.yolov11/
+├── train/
+│   ├── images/
+│   └── labels/
+├── valid/
+│   ├── images/
+│   └── labels/
+├── test/
+│   ├── images/
+│   └── labels/
+└── data.yaml
