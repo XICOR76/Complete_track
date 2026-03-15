@@ -33,9 +33,6 @@ outputs/
 # YOLO runs
 runs/
 
-# Dataset (large files)
-dataset/
-*.ndjson
 
 # IDE
 .vscode/
