@@ -1,10 +1,9 @@
 """
-Approach 3 — Custom Research Tracker
-Most flexible and experimental architecture.
+Approach 3 — Custom Research Tracker (Enhanced)
 Plug in ANY combination of:
   • Detector     : YOLO / Faster R-CNN
   • Motion model : Kalman / Particle Filter
-  • ReID         : Custom matcher (cosine / euclidean / Mahalanobis)
+  • ReID         : Enhanced matcher (color + deep + proportion + zone)
 """
 
 import numpy as np
@@ -25,28 +24,23 @@ class TrackState(Enum):
     TENTATIVE = 'tentative'
     CONFIRMED = 'confirmed'
     DELETED   = 'deleted'
-    OCCLUDED  = 'occluded'   # extra state for research: tracked but not visible
+    OCCLUDED  = 'occluded'
 
 
 @dataclass
 class ResearchTrack:
-    """
-    Research track with richer metadata than standard DeepSORT track.
-    """
-    track_id   : int
-    motion_state: dict                          # managed by motion model
-    n_init     : int = 3
-    max_age    : int = 60
+    track_id    : int
+    motion_state: dict
+    n_init      : int = 3
+    max_age     : int = 60
 
-    state      : TrackState = field(init=False, default=TrackState.TENTATIVE)
-    hits       : int        = field(init=False, default=1)
-    age        : int        = field(init=False, default=1)
-    time_since_update: int  = field(init=False, default=0)
-
-    # Research metadata
-    trajectory : List[np.ndarray] = field(init=False, default_factory=list)
-    confidence_history: List[float] = field(init=False, default_factory=list)
-    occlusion_count: int = field(init=False, default=0)
+    state             : TrackState = field(init=False, default=TrackState.TENTATIVE)
+    hits              : int        = field(init=False, default=1)
+    age               : int        = field(init=False, default=1)
+    time_since_update : int        = field(init=False, default=0)
+    trajectory        : List[np.ndarray] = field(init=False, default_factory=list)
+    confidence_history: List[float]      = field(init=False, default_factory=list)
+    occlusion_count   : int        = field(init=False, default=0)
 
     def predict(self, motion_model: MotionModel):
         self.motion_state = motion_model.predict(self.motion_state)
@@ -60,7 +54,6 @@ class ResearchTrack:
         self.confidence_history.append(confidence)
         self.hits += 1
         self.time_since_update = 0
-
         if self.state == TrackState.TENTATIVE and self.hits >= self.n_init:
             self.state = TrackState.CONFIRMED
         elif self.state == TrackState.OCCLUDED:
@@ -72,7 +65,7 @@ class ResearchTrack:
             self.state = TrackState.DELETED
         elif self.time_since_update > self.max_age:
             self.state = TrackState.DELETED
-        elif self.state == TrackState.CONFIRMED and self.time_since_update > 3:
+        elif self.state == TrackState.CONFIRMED and self.time_since_update > 30:
             self.state = TrackState.OCCLUDED
 
     def get_bbox(self, motion_model: MotionModel) -> np.ndarray:
@@ -86,7 +79,7 @@ class ResearchTrack:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Assignment strategies
+# Assignment helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def iou(a: np.ndarray, b: np.ndarray) -> float:
@@ -98,49 +91,70 @@ def iou(a: np.ndarray, b: np.ndarray) -> float:
     return inter / (area_a + area_b - inter + 1e-8)
 
 
-def build_cost_matrix(
-    tracks: List[ResearchTrack],
+def build_iou_cost(
+    tracks: list,
+    track_indices: List[int],
+    det_bboxes: np.ndarray,
+    motion_model: MotionModel
+) -> np.ndarray:
+    """Pure IoU cost matrix."""
+    n_t = len(track_indices)
+    n_d = len(det_bboxes)
+    cost = np.zeros((n_t, n_d), dtype=np.float32)
+    for i, t_idx in enumerate(track_indices):
+        pred_box = tracks[t_idx].get_bbox(motion_model)
+        for j, det_box in enumerate(det_bboxes):
+            cost[i, j] = 1.0 - iou(pred_box, det_box)
+    return cost
+
+
+def build_enhanced_cost(
+    tracks: list,
     track_indices: List[int],
     det_bboxes: np.ndarray,
     det_embeddings: Optional[np.ndarray],
     reid_matcher: Optional[ReIDMatcher],
     motion_model: MotionModel,
-    motion_weight: float = 0.4,
-    appearance_weight: float = 0.6
+    iou_weight: float,
+    reid_weight: float,
+    # Enhanced feature subsets
+    det_color_hists: Optional[np.ndarray] = None,
+    det_proportions: Optional[np.ndarray] = None,
+    frame_shape: Optional[Tuple[int,int]] = None,
+    time_since: Optional[Dict[int,int]] = None,
 ) -> np.ndarray:
     """
-    Fused cost matrix: weighted combination of appearance + IoU.
-
-    The weights are tunable for research experiments:
-      - motion_weight=1.0, appearance_weight=0.0 → pure IoU (SORT)
-      - motion_weight=0.0, appearance_weight=1.0 → pure ReID
-      - motion_weight=0.4, appearance_weight=0.6 → balanced (default)
+    Fused cost = iou_weight * IoU_cost + reid_weight * ReID_cost.
+    ReID cost now includes color histogram + proportions + entry zone.
     """
     n_t = len(track_indices)
     n_d = len(det_bboxes)
     cost = np.zeros((n_t, n_d), dtype=np.float32)
 
-    # ── IoU cost ──────────────────────────────────────────────────────────────
-    iou_cost = np.zeros((n_t, n_d))
-    for i, t_idx in enumerate(track_indices):
-        pred_box = tracks[t_idx].get_bbox(motion_model)
-        for j, det_box in enumerate(det_bboxes):
-            iou_cost[i, j] = 1.0 - iou(pred_box, det_box)
+    # ── IoU component ─────────────────────────────────────────────────────────
+    if iou_weight > 0:
+        iou_cost = build_iou_cost(tracks, track_indices, det_bboxes, motion_model)
+        cost += iou_weight * iou_cost
 
-    cost += motion_weight * iou_cost
+    # ── ReID component (enhanced) ─────────────────────────────────────────────
+    if reid_weight > 0 and reid_matcher is not None and det_embeddings is not None:
+        track_ids = [tracks[t_idx].track_id for t_idx in track_indices]
 
-    # ── Appearance cost ───────────────────────────────────────────────────────
-    if reid_matcher is not None and det_embeddings is not None:
-        time_since = {tracks[t_idx].track_id: tracks[t_idx].time_since_update
-                      for t_idx in track_indices}
-        app_cost = reid_matcher.compute_distance_matrix(
-            track_ids=[tracks[t_idx].track_id for t_idx in track_indices],
-            det_embeddings=det_embeddings,
-            time_since_update=time_since
-        )
-        # Cap appearance cost to [0,1] range for invalid pairs
+        if hasattr(reid_matcher, 'compute_distance_matrix'):
+            app_cost = reid_matcher.compute_distance_matrix(
+                track_ids=track_ids,
+                det_embeddings=det_embeddings,
+                time_since_update=time_since,
+                det_color_hists=det_color_hists,
+                det_proportions=det_proportions,
+                det_bboxes=det_bboxes,
+                frame_shape=frame_shape,
+            )
+        else:
+            app_cost = np.ones((n_t, n_d), dtype=np.float32)
+
         app_cost_clipped = np.clip(app_cost, 0, 1)
-        cost += appearance_weight * app_cost_clipped
+        cost += reid_weight * app_cost_clipped
 
     return cost
 
@@ -160,7 +174,8 @@ def hungarian_assign(
         if cost[r, c] > threshold:
             continue
         matches.append((r, c))
-        matched_rows.add(r); matched_cols.add(c)
+        matched_rows.add(r)
+        matched_cols.add(c)
 
     u_tracks = [i for i in range(cost.shape[0]) if i not in matched_rows]
     u_dets   = [i for i in range(cost.shape[1]) if i not in matched_cols]
@@ -173,17 +188,9 @@ def hungarian_assign(
 
 class ResearchTracker:
     """
-    Modular research tracker.
-
-    All components are swappable:
-      motion_model   → KalmanMotionModel() or ParticleFilterModel()
-      reid_matcher   → ReIDMatcher(metric=..., strategy=...) or None
-      detector       → pass in bboxes from any upstream detector
-
-    Three-stage matching cascade:
-      Stage 1: Appearance + IoU for confirmed tracks (recent)
-      Stage 2: IoU-only for confirmed tracks (long-absent)
-      Stage 3: IoU-only for tentative tracks
+    Enhanced modular research tracker.
+    Now uses color histogram + body proportions + entry zone + mutual exclusivity
+    to prevent ID swaps between 2 people going in/out of frame.
     """
 
     def __init__(
@@ -196,17 +203,17 @@ class ResearchTracker:
         fusion_threshold: float = 0.6,
         motion_weight: float = 0.4,
         appearance_weight: float = 0.6,
-        long_absence_threshold: int = 10   # frames before switching to IoU-only
+        long_absence_threshold: int = 10
     ):
-        self.motion_model     = motion_model
-        self.reid_matcher     = reid_matcher
-        self.max_age          = max_age
-        self.n_init           = n_init
-        self.iou_threshold    = iou_threshold
-        self.fusion_threshold = fusion_threshold
-        self.motion_weight    = motion_weight
+        self.motion_model      = motion_model
+        self.reid_matcher      = reid_matcher
+        self.max_age           = max_age
+        self.n_init            = n_init
+        self.iou_threshold     = iou_threshold
+        self.fusion_threshold  = fusion_threshold
+        self.motion_weight     = motion_weight
         self.appearance_weight = appearance_weight
-        self.long_absence     = long_absence_threshold
+        self.long_absence      = long_absence_threshold
 
         self.tracks: List[ResearchTrack] = []
         self._next_id = 1
@@ -221,32 +228,42 @@ class ResearchTracker:
     def update(
         self,
         frame: np.ndarray,
-        bboxes: np.ndarray,        # (N, 4) [x1,y1,x2,y2]
-        confidences: np.ndarray    # (N,)
+        bboxes: np.ndarray,
+        confidences: np.ndarray
     ) -> List[dict]:
-        """
-        Full update cycle per frame.
 
-        Returns active track dicts with rich metadata.
-        """
-        # ── 1. Extract ReID features ──────────────────────────────────────────
-        det_embeddings = None
+        fh, fw = frame.shape[:2]
+
+        # ── 1. Extract ALL features ───────────────────────────────────────────
+        det_embeddings  = None
+        det_color_hists = None
+        det_proportions = None
+
         if self.reid_matcher is not None and len(bboxes) > 0:
-            det_embeddings = self.reid_matcher.extract_embeddings(frame, bboxes)
+            if hasattr(self.reid_matcher, 'extract_all_features'):
+                all_feats       = self.reid_matcher.extract_all_features(frame, bboxes)
+                det_embeddings  = all_feats['embeddings']
+                det_color_hists = all_feats['color_hists']
+                det_proportions = all_feats['proportions']
+            else:
+                det_embeddings = self.reid_matcher.extract_embeddings(frame, bboxes)
 
-        # ── 2. Measurements: [cx, cy, w, h] ──────────────────────────────────
+        # ── 2. Measurements ───────────────────────────────────────────────────
         measurements = self._to_measurements(bboxes)
 
         # ── 3. Predict all tracks ─────────────────────────────────────────────
         for track in self.tracks:
             track.predict(self.motion_model)
 
-        # ── 4. Three-stage cascade matching ───────────────────────────────────
-        matches, unmatched_tracks, unmatched_dets = self._three_stage_match(
-            bboxes, measurements, det_embeddings, confidences
+        # ── 4. Four-stage cascade matching ────────────────────────────────────
+        matches, unmatched_tracks, unmatched_dets = self._four_stage_match(
+            bboxes, measurements, det_embeddings, confidences,
+            det_color_hists=det_color_hists,
+            det_proportions=det_proportions,
+            frame_shape=(fh, fw)
         )
 
-        # ── 5. Update matched ─────────────────────────────────────────────────
+        # ── 5. Update matched tracks ──────────────────────────────────────────
         for t_idx, d_idx in matches:
             self.tracks[t_idx].update(
                 self.motion_model,
@@ -256,10 +273,12 @@ class ResearchTracker:
             if det_embeddings is not None and self.reid_matcher is not None:
                 self.reid_matcher.update_gallery(
                     self.tracks[t_idx].track_id,
-                    det_embeddings[d_idx]
+                    det_embeddings[d_idx],
+                    frame=frame,
+                    bbox=bboxes[d_idx]
                 )
 
-        # ── 6. Handle unmatched tracks ────────────────────────────────────────
+        # ── 6. Mark missed tracks ─────────────────────────────────────────────
         for t_idx in unmatched_tracks:
             self.tracks[t_idx].mark_missed()
 
@@ -268,7 +287,9 @@ class ResearchTracker:
             self._create_track(
                 measurements[d_idx],
                 det_embeddings[d_idx] if det_embeddings is not None else None,
-                float(confidences[d_idx])
+                float(confidences[d_idx]),
+                frame=frame,
+                bbox=bboxes[d_idx]
             )
 
         # ── 8. Remove deleted, clean galleries ───────────────────────────────
@@ -281,7 +302,7 @@ class ResearchTracker:
         # ── 9. Return results ─────────────────────────────────────────────────
         results = []
         for t in self.tracks:
-            if t.is_confirmed() and t.time_since_update <= 1:
+            if (t.is_confirmed() or t.is_occluded()) and t.time_since_update <= 1:
                 bbox = t.get_bbox(self.motion_model)
                 results.append({
                     'track_id'       : t.track_id,
@@ -295,65 +316,132 @@ class ResearchTracker:
         return results
 
     def get_all_tracks(self) -> List[ResearchTrack]:
-        """Return raw track objects (for analysis/debugging)."""
         return self.tracks
 
     # ── Matching logic ────────────────────────────────────────────────────────
 
-    def _three_stage_match(
+    def _four_stage_match(
         self,
-        bboxes, measurements, det_embeddings, confidences
+        bboxes, measurements, det_embeddings, confidences,
+        det_color_hists=None,
+        det_proportions=None,
+        frame_shape=None,
     ) -> Tuple[List, List, List]:
 
+        # ── Bucket 1: CONFIRMED recently seen ────────────────────────────────
         confirmed_recent = [
             i for i, t in enumerate(self.tracks)
             if t.is_confirmed() and t.time_since_update <= self.long_absence
         ]
+        # ── Bucket 2: CONFIRMED long-absent ──────────────────────────────────
         confirmed_old = [
             i for i, t in enumerate(self.tracks)
-            if (t.is_confirmed() or t.is_occluded())
-            and t.time_since_update > self.long_absence
+            if t.is_confirmed() and t.time_since_update > self.long_absence
         ]
-        tentative = [i for i, t in enumerate(self.tracks) if t.is_tentative()]
+        # ── Bucket 3: OCCLUDED (out of frame) ────────────────────────────────
+        occluded = [
+            i for i, t in enumerate(self.tracks)
+            if t.is_occluded()
+        ]
+        # ── Bucket 4: TENTATIVE (new, no gallery) ────────────────────────────
+        tentative = [
+            i for i, t in enumerate(self.tracks)
+            if t.is_tentative()
+        ]
 
         all_matches: List[Tuple[int, int]] = []
         unmatched_dets = list(range(len(bboxes)))
         all_unmatched_tracks: List[int] = []
 
-        # Stage 1 — appearance + IoU, confirmed recent
+        time_since = {
+            t.track_id: t.time_since_update for t in self.tracks
+        }
+
+        # ── Stage 1: Confirmed recent → ReID(0.6) + IoU(0.4) ─────────────────
         if confirmed_recent and unmatched_dets:
-            det_subset = bboxes[unmatched_dets]
-            emb_subset = det_embeddings[unmatched_dets] if det_embeddings is not None else None
-            cost = build_cost_matrix(
-                self.tracks, confirmed_recent, det_subset, emb_subset,
+            sub_bboxes = bboxes[unmatched_dets]
+            sub_emb    = det_embeddings[unmatched_dets] if det_embeddings is not None else None
+            sub_col    = det_color_hists[unmatched_dets] if det_color_hists is not None else None
+            sub_prop   = det_proportions[unmatched_dets] if det_proportions is not None else None
+
+            cost = build_enhanced_cost(
+                self.tracks, confirmed_recent, sub_bboxes, sub_emb,
                 self.reid_matcher, self.motion_model,
-                self.motion_weight, self.appearance_weight
+                iou_weight=self.motion_weight,
+                reid_weight=self.appearance_weight,
+                det_color_hists=sub_col,
+                det_proportions=sub_prop,
+                frame_shape=frame_shape,
+                time_since=time_since,
             )
             m, u_t, u_d = hungarian_assign(cost, self.fusion_threshold)
+
+            # Mutual exclusivity check for stage 1
+            m, rejected = self._mutual_exclusivity(cost, m)
+            u_d = list(set(u_d) | set(rejected))
+
             for lt, ld in m:
                 all_matches.append((confirmed_recent[lt], unmatched_dets[ld]))
             all_unmatched_tracks += [confirmed_recent[i] for i in u_t]
             unmatched_dets = [unmatched_dets[i] for i in u_d]
 
-        # Stage 2 — IoU only, confirmed but long-absent
+        # ── Stage 2: Confirmed long-absent → ReID(0.8) + IoU(0.2) ───────────
         if confirmed_old and unmatched_dets:
-            det_subset = bboxes[unmatched_dets]
-            cost = build_cost_matrix(
-                self.tracks, confirmed_old, det_subset, None,
-                None, self.motion_model, 1.0, 0.0
+            sub_bboxes = bboxes[unmatched_dets]
+            sub_emb    = det_embeddings[unmatched_dets] if det_embeddings is not None else None
+            sub_col    = det_color_hists[unmatched_dets] if det_color_hists is not None else None
+            sub_prop   = det_proportions[unmatched_dets] if det_proportions is not None else None
+
+            cost = build_enhanced_cost(
+                self.tracks, confirmed_old, sub_bboxes, sub_emb,
+                self.reid_matcher, self.motion_model,
+                iou_weight=0.2,
+                reid_weight=0.8,
+                det_color_hists=sub_col,
+                det_proportions=sub_prop,
+                frame_shape=frame_shape,
+                time_since=time_since,
             )
-            m, u_t, u_d = hungarian_assign(cost, self.iou_threshold)
+            m, u_t, u_d = hungarian_assign(cost, self.fusion_threshold)
+            m, rejected = self._mutual_exclusivity(cost, m)
+            u_d = list(set(u_d) | set(rejected))
+
             for lt, ld in m:
                 all_matches.append((confirmed_old[lt], unmatched_dets[ld]))
             all_unmatched_tracks += [confirmed_old[i] for i in u_t]
             unmatched_dets = [unmatched_dets[i] for i in u_d]
 
-        # Stage 3 — IoU only, tentative tracks
+        # ── Stage 3: OCCLUDED → pure ReID (1.0), zero IoU ────────────────────
+        if occluded and unmatched_dets:
+            sub_bboxes = bboxes[unmatched_dets]
+            sub_emb    = det_embeddings[unmatched_dets] if det_embeddings is not None else None
+            sub_col    = det_color_hists[unmatched_dets] if det_color_hists is not None else None
+            sub_prop   = det_proportions[unmatched_dets] if det_proportions is not None else None
+
+            cost = build_enhanced_cost(
+                self.tracks, occluded, sub_bboxes, sub_emb,
+                self.reid_matcher, self.motion_model,
+                iou_weight=0.0,
+                reid_weight=1.0,
+                det_color_hists=sub_col,
+                det_proportions=sub_prop,
+                frame_shape=frame_shape,
+                time_since=time_since,
+            )
+            m, u_t, u_d = hungarian_assign(cost, self.fusion_threshold)
+            m, rejected = self._mutual_exclusivity(cost, m)
+            u_d = list(set(u_d) | set(rejected))
+
+            for lt, ld in m:
+                all_matches.append((occluded[lt], unmatched_dets[ld]))
+            all_unmatched_tracks += [occluded[i] for i in u_t]
+            unmatched_dets = [unmatched_dets[i] for i in u_d]
+
+        # ── Stage 4: Tentative → pure IoU ────────────────────────────────────
         if tentative and unmatched_dets:
-            det_subset = bboxes[unmatched_dets]
-            cost = build_cost_matrix(
-                self.tracks, tentative, det_subset, None,
-                None, self.motion_model, 1.0, 0.0
+            sub_bboxes = bboxes[unmatched_dets]
+            cost = build_iou_cost(
+                self.tracks, tentative, sub_bboxes, self.motion_model
             )
             m, u_t, u_d = hungarian_assign(cost, self.iou_threshold)
             for lt, ld in m:
@@ -362,6 +450,33 @@ class ResearchTracker:
             unmatched_dets = [unmatched_dets[i] for i in u_d]
 
         return all_matches, all_unmatched_tracks, unmatched_dets
+
+    def _mutual_exclusivity(
+        self,
+        cost: np.ndarray,
+        matches: List[Tuple[int, int]],
+        margin: float = 0.08
+    ) -> Tuple[List[Tuple[int,int]], List[int]]:
+        """
+        Reject ambiguous assignments where 2 tracks competed closely.
+        Returns (clean_matches, rejected_det_local_indices).
+        """
+        if cost.size == 0 or len(matches) == 0:
+            return matches, []
+
+        n_dets = cost.shape[1]
+        ambiguous = set()
+
+        for d in range(n_dets):
+            col = cost[:, d]
+            valid_costs = sorted([c for c in col if c < 1e4])
+            if len(valid_costs) >= 2:
+                if (valid_costs[1] - valid_costs[0]) < margin and valid_costs[0] < self.fusion_threshold:
+                    ambiguous.add(d)
+
+        clean   = [(t, d) for t, d in matches if d not in ambiguous]
+        rejected = list(ambiguous)
+        return clean, rejected
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -378,17 +493,24 @@ class ResearchTracker:
         self,
         measurement: np.ndarray,
         embedding: Optional[np.ndarray],
-        confidence: float
+        confidence: float,
+        frame: np.ndarray = None,
+        bbox: np.ndarray = None,
     ):
         state = self.motion_model.initiate(measurement)
         track = ResearchTrack(
-            track_id    = self._next_id,
+            track_id     = self._next_id,
             motion_state = state,
-            n_init      = self.n_init,
-            max_age     = self.max_age
+            n_init       = self.n_init,
+            max_age      = self.max_age
         )
         track.confidence_history.append(confidence)
         if embedding is not None and self.reid_matcher is not None:
-            self.reid_matcher.update_gallery(self._next_id, embedding)
+            self.reid_matcher.update_gallery(
+                self._next_id,
+                embedding,
+                frame=frame,
+                bbox=bbox
+            )
         self.tracks.append(track)
         self._next_id += 1

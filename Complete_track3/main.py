@@ -5,18 +5,33 @@ Custom Detector + Kalman/Particle Filter + Custom ReID
 Fully configurable from CLI. Designed for research experiments.
 
 Usage examples:
-    # YOLO + Kalman + cosine ReID
-    python main.py --source video.mp4 --detector yolo --motion kalman --metric cosine
+# YOLO + Kalman + cosine ReID
+python Complete_track3/main.py --source train_video.mp4 --detector yolo --motion kalman --metric cosine --output outputs/a3_kalman_video.mp4
+# Laptop camera (built-in)
+python Complete_track3/main.py --source 0 --detector yolo --motion kalman --metric cosine --output outputs/a3_kalman_laptop.mp4
+# External USB camera
+python Complete_track3/main.py --source 1 --detector yolo --motion kalman --metric cosine --output outputs/a3_kalman_external.mp4
+    
+# YOLO + Particle Filter (experimental)
+python Complete_track3/main.py --source train_video.mp4 --detector yolo --motion particle --n_particles 500 --output outputs/a3_particle_video.mp4
+# Laptop camera
+python Complete_track3/main.py --source 0 --detector yolo --motion particle --n_particles 500 --output outputs/a3_particle_laptop.mp4
+# External USB camera
+python Complete_track3/main.py --source 1 --detector yolo --motion particle --n_particles 500 --output outputs/a3_particle_external.mp4
 
-    # YOLO + Particle Filter (experimental)
-    python main.py --source video.mp4 --detector yolo --motion particle --n_particles 500
+# Faster R-CNN + Kalman, no ReID (pure motion baseline)
+python Complete_track3/main.py --source train_video.mp4 --detector fasterrcnn --motion kalman --no_reid --output outputs/a3_rcnn_video.mp4
+# Laptop camera
+python Complete_track3/main.py --source 0 --detector fasterrcnn --motion kalman --no_reid --output outputs/a3_rcnn_laptop.mp4
+# External USB camera
+python Complete_track3/main.py --source 1 --detector fasterrcnn --motion kalman --no_reid --output outputs/a3_rcnn_external.mp4
 
-    # Faster R-CNN + Kalman, no ReID (pure motion baseline)
-    python main.py --source video.mp4 --detector fasterrcnn --motion kalman --no_reid
-
-    # Full research mode with trajectory visualisation
-    python main.py --source video.mp4 --motion particle --show_trajectory --show_uncertainty
-"""
+# Full research mode with trajectory visualisation
+python Complete_track3/main.py --source train_video.mp4 --motion particle --show_trajectory --show_uncertainty --output outputs/a3_research_video.mp4
+# Laptop camera
+python Complete_track3/main.py --source 0 --motion particle --show_trajectory --show_uncertainty --output outputs/a3_research_laptop.mp4
+# External USB camera
+python Complete_track3/main.py --source 1 --motion particle --show_trajectory --show_uncertainty --output outputs/a3_research_external.mp4"""
 
 import argparse
 import time
@@ -61,7 +76,7 @@ def build_detector(args):
             args.detector = 'fasterrcnn'
 
     if args.detector == 'fasterrcnn':
-        sys.path.insert(0, str(Path(__file__).parent.parent / 'approach2'))
+        sys.path.insert(0, str(Path(__file__).parent.parent / 'Complete_track2'))
         from detector import FasterRCNNDetector
 
         rcnn = FasterRCNNDetector(confidence_threshold=args.conf_thresh)
@@ -302,7 +317,7 @@ def parse_args():
 
     # Detector
     p.add_argument('--detector',   default='yolo',        choices=['yolo', 'fasterrcnn'])
-    p.add_argument('--yolo_model', default='yolov8n.pt')
+    p.add_argument('--yolo_model', default='yolo11s.pt')
     p.add_argument('--conf_thresh',default=0.4, type=float)
 
     # Motion model

@@ -1,6 +1,6 @@
 """
 track_bytetrack.py  -  Human tracking with occlusion handling
-Uses your fine-tuned YOLOv11-seg model + ByteTrack
+Uses fine-tuned YOLOv11-seg model + ByteTrack
 
 ByteTrack vs DeepSORT:
   - ByteTrack uses ALL detections (high + low confidence) for matching
@@ -133,16 +133,16 @@ def main():
     model = YOLO(MODEL_PATH)
     print("[INFO] Model classes:", model.names)
 
-    cap = cv2.VideoCapture(VIDEO_IN)
-    assert cap.isOpened(), f"Cannot open {VIDEO_IN}"
     #cap = cv2.VideoCapture(VIDEO_IN)
-    #assert cap.isOpened(), f"Cannot open camera {VIDEO_IN}"
-    #print(f"[INFO] Camera resolution: {int(cap.get(3))} x {int(cap.get(4))}")
+    #assert cap.isOpened(), f"Cannot open {VIDEO_IN}"
+    cap = cv2.VideoCapture(VIDEO_IN)
+    assert cap.isOpened(), f"Cannot open camera {VIDEO_IN}"
+    print(f"[INFO] Camera resolution: {int(cap.get(3))} x {int(cap.get(4))}")
 
     W       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     H       = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    FPS_SRC = cap.get(cv2.CAP_PROP_FPS) or 5.0
-    #FPS_SRC = cap.get(cv2.CAP_PROP_FPS) or 30.0   # webcams default to 30fps
+    #FPS_SRC = cap.get(cv2.CAP_PROP_FPS) or 5.0
+    FPS_SRC = cap.get(cv2.CAP_PROP_FPS) or 30.0   # webcams default to 30fps
 
     writer = cv2.VideoWriter(
         VIDEO_OUT,

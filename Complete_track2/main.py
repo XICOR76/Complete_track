@@ -1,9 +1,18 @@
 """
-Approach 2 — Main Pipeline
 Faster R-CNN  +  DeepSORT  +  Strong ReID
 
-Usage:
-    python main.py --source video.mp4 [--reid_weights reid.pth] [--output out.mp4]
+Usage:# Video file
+python Complete_track2/main.py --source train_video.mp4 --output outputs/approach2_result.mp4
+
+# With ReID weights
+python Complete_track2/main.py --source train_video.mp4 --reid_weights weights/reid_market1501.pth --output outputs/approach2_result.mp4
+
+# Laptop camera
+python Complete_track2/main.py --source 0 --output outputs/approach2_laptop.mp4
+
+# External camera
+python Complete_track2/main.py --source 1 --output outputs/approach2_external.mp4
+    
 """
 
 import argparse
@@ -74,12 +83,17 @@ class Approach2Pipeline:
 
         # ── DeepSORT Tracker ──────────────────────────────────────────────────
         self.tracker = DeepSORTTracker(
-            reid_extractor        = reid_extractor,
-            max_age               = args.max_age,
-            n_init                = args.n_init,
-            max_iou_distance      = args.max_iou_dist,
-            max_appearance_distance=args.max_app_dist,
-            appearance_weight     = args.app_weight
+            reid_extractor          = reid_extractor,
+            max_age                 = args.max_age,
+            n_init                  = args.n_init,
+            max_iou_distance        = args.max_iou_dist,
+            max_appearance_distance = args.max_app_dist,
+            appearance_weight       = args.app_weight,
+            color_weight            = args.color_weight,
+            deep_weight             = args.deep_weight,
+            zone_weight             = args.zone_weight,
+            ambiguity_margin        = args.ambiguity_margin,
+            long_absence_threshold  = args.long_absence
         )
 
         self.args = args
@@ -161,13 +175,22 @@ def parse_args():
     p.add_argument('--reid_weights', default='',           help='path to ReID .pth weights')
     p.add_argument('--output',       default='',           help='output video path')
     p.add_argument('--conf_thresh',  default=0.5,  type=float)
-    p.add_argument('--max_age',      default=30,   type=int)
-    p.add_argument('--n_init',       default=3,    type=int)
-    p.add_argument('--max_iou_dist', default=0.7,  type=float)
-    p.add_argument('--max_app_dist', default=0.4,  type=float)
-    p.add_argument('--app_weight',   default=0.5,  type=float,
-                   help='Blend weight: 1.0 = pure appearance, 0.0 = pure IoU')
-    p.add_argument('--headless',     action='store_true')
+    p.add_argument('--max_age',          default=60,   type=int)
+    p.add_argument('--n_init',           default=3,    type=int)
+    p.add_argument('--max_iou_dist',     default=0.7,  type=float)
+    p.add_argument('--max_app_dist',     default=0.45, type=float)
+    p.add_argument('--app_weight',       default=0.5,  type=float)
+    p.add_argument('--color_weight',     default=0.35, type=float,
+                   help='Weight for color histogram matching')
+    p.add_argument('--deep_weight',      default=0.40, type=float,
+                   help='Weight for deep embedding matching')
+    p.add_argument('--zone_weight',      default=0.15, type=float,
+                   help='Weight for entry zone penalty')
+    p.add_argument('--ambiguity_margin', default=0.08, type=float,
+                   help='Margin below which assignments are rejected as ambiguous')
+    p.add_argument('--long_absence',     default=10,   type=int,
+                   help='Frames before switching to ReID-only matching')
+    p.add_argument('--headless',         action='store_true')
     return p.parse_args()
 
 
